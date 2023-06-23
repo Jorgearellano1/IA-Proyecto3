@@ -1,0 +1,101 @@
+import os
+import librosa
+import numpy as np
+import csv
+from sklearn.model_selection import train_test_split
+import pandas as pd
+
+def extract_mfcc_features(file_path):
+    audio, sr = librosa.load(file_path)
+    mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=128) 
+    return np.mean(mfcc, axis=1)
+
+def process_dataset(dataset_path):
+    dataset = []
+
+    song_folder = os.path.join(dataset_path, "Song")
+    actor_folders_song = sorted([name for name in os.listdir(song_folder) if os.path.isdir(os.path.join(song_folder, name))])
+    actor_count_song = len(actor_folders_song)
+    print("Número de actores en la carpeta 'Song':", actor_count_song)
+    print("Actores en la carpeta 'Song':", actor_folders_song)
+    for actor_folder in sorted(os.listdir(song_folder)):
+        actor_path = os.path.join(song_folder, actor_folder)
+        if os.path.isdir(actor_path):
+            # Recorrer archivos WAV en la carpeta del actor
+            for file_name in sorted(os.listdir(actor_path)):
+                if file_name.endswith(".wav"):
+                    file_path = os.path.join(actor_path, file_name)
+                    # Extraer características MFCC
+                    mfcc = extract_mfcc_features(file_path)
+                    label = "Actor_" + actor_folder[-2:]  
+                    dataset.append((mfcc, label))
+
+    speech_folder = os.path.join(dataset_path, "Speech")
+    actor_count_speech = len([name for name in os.listdir(speech_folder) if os.path.isdir(os.path.join(speech_folder, name))])
+    print("Número de actores en la carpeta 'Speech':", actor_count_speech)
+    for actor_folder in sorted(os.listdir(speech_folder)):
+        actor_path = os.path.join(speech_folder, actor_folder)
+        if os.path.isdir(actor_path):
+            for file_name in sorted(os.listdir(actor_path)):
+                if file_name.endswith(".wav"):
+                    file_path = os.path.join(actor_path, file_name)
+                    mfcc = extract_mfcc_features(file_path)
+                    label = "Actor_" + actor_folder[-2:]  
+                    dataset.append((mfcc, label))
+
+    return dataset
+
+def save_dataset_to_csv(dataset, output_path):
+    headers = [f'feature_{i}' for i in range(128)]  
+    headers.append('label') 
+
+    with open(output_path, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(headers) 
+
+        for mfcc, label in dataset:
+            assert len(mfcc) == 128, "El vector de características no tiene longitud 128"
+            mfcc_list = mfcc.tolist()
+            mfcc_list = [round(val, 4) for val in mfcc_list]
+            mfcc_list.append(label)  
+            writer.writerow(mfcc_list)
+
+def save_data_to_csv(data, labels, output_path):
+    headers = [f'feature_{i}' for i in range(128)]
+    headers.append('label')
+
+    with open(output_path, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(headers)
+
+        for datum, label in zip(data, labels):
+            datum = [round(val, 4) for val in datum]
+            datum.append(label)
+            writer.writerow(datum)
+
+
+dataset_path = "sound_dataset"
+dataset = process_dataset(dataset_path)
+
+print("Número de muestras en el dataset:", len(dataset))
+
+csv_output_path = "dataset.csv"
+
+save_dataset_to_csv(dataset, csv_output_path)
+
+print("El archivo dataset.csv se ha guardado exitosamente.")
+
+dataframe = pd.read_csv(csv_output_path)
+
+feature_columns = [f'feature_{i}' for i in range(128)]
+
+X = dataframe[feature_columns].values.tolist()
+y = dataframe['label'].tolist()
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+save_data_to_csv(X_train, y_train, 'training.csv')
+save_data_to_csv(X_test, y_test, 'testing.csv')
+
+print(f"Training set size: {len(X_train)}")
+print(f"Test set size: {len(X_test)}")
