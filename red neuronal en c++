@@ -1,0 +1,282 @@
+#include <Eigen/Dense>
+#include <vector>
+#include <cmath>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <iomanip>  
+
+using namespace std;
+using namespace Eigen;
+
+double sigmoid(double x) { return 1.0 / (1.0 + exp(-x)); }
+double sigmoid_prime(double y) { return y * (1.0 - y); }  
+
+double tanh(double x) { return std::tanh(x); }
+double tanh_prime(double y) { return 1.0 - y * y; }  
+
+double relu(double x) { return x > 0 ? x : 0; }
+double relu_prime(double y) { return y > 0 ? 1 : 0; }  
+class MLP {
+private:
+    vector<MatrixXd> weights;
+    vector<MatrixXd> biases;
+    vector<MatrixXd> layers;
+    vector<MatrixXd> errors;
+
+    double (*hidden_activation_function)(double);
+    double (*hidden_activation_function_prime)(double);
+    double (*output_activation_function)(double);
+    double (*output_activation_function_prime)(double);
+
+public:
+    MLP(vector<int> const &topology, double (*hidden_activation_function)(double), double (*hidden_activation_function_prime)(double)) {
+        this->hidden_activation_function = hidden_activation_function;
+        this->hidden_activation_function_prime = hidden_activation_function_prime;
+        this->output_activation_function = sigmoid;
+        this->output_activation_function_prime = sigmoid_prime;
+
+        for (size_t i = 0; i < topology.size()-1; i++) {
+            weights.push_back(0.5 * MatrixXd::Random(topology[i+1], topology[i]));
+            biases.push_back(0.5 * VectorXd::Random(topology[i+1]));
+            layers.push_back(VectorXd::Zero(topology[i]));
+            errors.push_back(VectorXd::Zero(topology[i+1]));
+        }
+        layers.push_back(VectorXd::Zero(topology.back()));
+        errors.push_back(VectorXd::Zero(topology.back()));
+    }
+
+    
+    VectorXd feedforward(VectorXd const &input) {
+        layers[0] = input;
+        for (size_t i = 0; i < weights.size() - 1; i++) {
+            layers[i+1] = (weights[i] * layers[i] + biases[i]).unaryExpr(ptr_fun(hidden_activation_function));
+        }
+        layers.back() = (weights.back() * layers[weights.size() - 1] + biases.back()).unaryExpr(ptr_fun(output_activation_function));
+        return layers.back();
+    }
+
+    void backpropagation(VectorXd const &target, double learning_rate) {
+        errors.back() = (layers.back() - target).cwiseProduct(layers.back().unaryExpr([this](double y) { return this->output_activation_function_prime(y); }));
+
+        for (int i = (int) weights.size() - 2; i >= 0; i--) {
+            VectorXd layer_prime = layers[i+1].unaryExpr([this](double y) { return this->hidden_activation_function_prime(y); });
+            errors[i] = (weights[i+1].transpose() * errors[i+1]).cwiseProduct(layer_prime);
+        }
+
+        for (size_t i = 0; i < weights.size(); i++) {
+            weights[i] -= learning_rate * errors[i] * layers[i].transpose();
+            biases[i] -= learning_rate * errors[i];
+        }
+    }
+
+
+
+    void train(vector<VectorXd> const &inputs, vector<VectorXd> const &targets, double learning_rate, int epochs) {
+        for (int i = 0; i < epochs; i++) {
+            for (size_t j = 0; j < inputs.size(); j++) {
+                feedforward(inputs[j]);
+                backpropagation(targets[j], learning_rate);
+            }
+        }
+    }
+
+    double mse(vector<VectorXd> const &inputs, vector<VectorXd> const &targets) {
+        double sum = 0;
+        for (size_t i = 0; i < inputs.size(); i++) {
+            VectorXd prediction = feedforward(inputs[i]);
+            VectorXd error = targets[i] - prediction;
+            sum += error.array().square().sum();
+        }
+        return sum / inputs.size();
+    }
+
+
+};
+
+
+double accuracy(vector<VectorXd> const &inputs, vector<VectorXd> const &targets, MLP &mlp) {
+    int correct = 0;
+    for (size_t i = 0; i < inputs.size(); i++) {
+        VectorXd prediction = mlp.feedforward(inputs[i]);
+        if (round(prediction(0)) == targets[i](0)) { 
+            correct++;
+        }
+    }
+    return (double) correct / inputs.size();
+}
+
+VectorXd normalize(VectorXd const &x) {
+    double min = x.minCoeff();
+    double max = x.maxCoeff();
+    return (x.array() - min) / (max - min);
+}
+string removeInvalidChars(const string &str) {
+    string cleaned;
+    for (char c : str) {
+        if (isdigit(c) || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E') {  // Add 'e' and 'E'
+            cleaned += c;
+        }
+    }
+    return cleaned;
+}
+vector<pair<VectorXd, double>> load_csv(const string &path, int num_features, bool include_labels) {
+    ifstream indata;
+    indata.open(path);
+    string line;
+    vector<pair<VectorXd, double>> data;
+
+    if (include_labels) {
+        getline(indata, line);
+    }
+
+    while (getline(indata, line)) {
+        stringstream lineStream(line);
+        string cell;
+        VectorXd sample(num_features);
+        int i = 0;
+
+        while (getline(lineStream, cell, ',')) {
+            cell = removeInvalidChars(cell);
+            if (cell.empty()) {
+                cerr << "Empty cell at line: " << line << endl;
+                throw std::invalid_argument("Empty cell");
+            }
+            if (i < num_features) {
+                try {
+                    sample[i] = stod(cell);
+                } catch (std::invalid_argument& e) {
+                    cerr << "Invalid argument: " << cell << " at line: " << line << endl;
+                    throw;
+                }
+            } else if (i == num_features) {
+                double target = stod(cell);
+                data.push_back(make_pair(sample, target));
+            } else {
+                cerr << "Too many cells at line: " << line << endl;
+                throw std::invalid_argument("Too many cells");
+            }
+            i++;
+        }
+
+
+
+        double target = stod(cell);
+        data.push_back(make_pair(sample, target));
+    }
+    return data;
+}
+vector<double> evaluate(vector<VectorXd> const &inputs, vector<VectorXd> const &targets, MLP &mlp) {
+    int true_positive = 0, false_positive = 0, false_negative = 0;
+
+    for (size_t i = 0; i < inputs.size(); i++) {
+        double prediction = round(mlp.feedforward(inputs[i])(0));
+        double target = targets[i](0);
+        if (prediction == 1 && target == 1) true_positive++;
+        if (prediction == 1 && target == 0) false_positive++;
+        if (prediction == 0 && target == 1) false_negative++;
+    }
+
+    double precision = true_positive * 1.0 / (true_positive + false_positive + 1e-7);
+    double recall = true_positive * 1.0 / (true_positive + false_negative + 1e-7);
+    double f1_score = 2 * precision * recall / (precision + recall + 1e-7);
+
+
+    return {precision, recall, f1_score};
+}
+void generateConfusionMatrix(vector<VectorXd> const &inputs, vector<VectorXd> const &targets, MLP &mlp) {
+    int confusionMatrix[2][2] = {0, 0, 0, 0}; // Inicializa la matriz de confusión
+
+    for (size_t i = 0; i < inputs.size(); i++) {
+        double prediction = round(mlp.feedforward(inputs[i])(0)); // Predicción del modelo
+        double target = targets[i](0); // Clase real
+
+        prediction = max(0.0, min(1.0, prediction));
+        target = max(0.0, min(1.0, target));
+
+        confusionMatrix[(int)target][(int)prediction] += 1; // Actualiza la matriz de confusión
+    }
+
+
+
+
+    cout << "Matriz de confusión:" << endl;
+    cout << "Verdaderos Positivos: " << confusionMatrix[1][1] << endl;
+    cout << "Falsos Positivos: " << confusionMatrix[0][1] << endl;
+    cout << "Verdaderos Negativos: " << confusionMatrix[0][0] << endl;
+    cout << "Falsos Negativos: " << confusionMatrix[1][0] << endl;
+}
+
+int main() {
+    cout << "Cargando y normalizando datos de entrenamiento y prueba..." << endl;
+    vector<pair<VectorXd, double>> raw_training_data = load_csv(
+            "/mnt/c/Users/Jorge/PycharmProjects/proyecto 3/training.csv", 128, true);
+    vector<pair<VectorXd, double>> raw_testing_data = load_csv(
+            "/mnt/c/Users/Jorge/PycharmProjects/proyecto 3/testing.csv", 128, true);
+
+
+    cout << "Tamaño de los datos de entrenamiento: " << raw_training_data.size() << endl;
+    cout << "Tamaño de los datos de prueba: " << raw_testing_data.size() << endl;
+
+    vector<VectorXd> training_inputs;
+    vector<VectorXd> training_targets;
+    for (const auto &pair: raw_training_data) {
+        training_inputs.push_back(normalize(pair.first));
+        training_targets.push_back(VectorXd::Constant(1, pair.second));
+    }
+
+    vector<VectorXd> testing_inputs;
+    vector<VectorXd> testing_targets;
+    for (const auto &pair: raw_testing_data) {
+        testing_inputs.push_back(normalize(pair.first));
+        testing_targets.push_back(VectorXd::Constant(1, pair.second));
+    }
+
+
+    cout << "Entrenando y evaluando configuraciones de red..." << endl;
+    cout << left << setw(20) << "Configuración"
+         << setw(15) << "Precisión"
+         << setw(15) << "Recall"
+         << setw(15) << "F1 Score" << endl;
+    vector<vector<int>> network_configurations = {
+            {128, 50, 1},  // 1 capa oculta con 50 neuronas
+            {128, 50, 100, 1},  // 2 capas ocultas con 50 y 100 neuronas
+            {128, 50, 100, 200, 1}  // 3 capas ocultas con 50, 100 y 200 neuronas
+    };
+    for (const auto &config: network_configurations) {
+        ostringstream debug_info;  
+        debug_info << "Configuración actual: ";
+        for (int layer_size: config) {
+            debug_info << layer_size << " ";
+        }
+        debug_info << endl;
+
+        MLP mlp(config, relu, relu_prime);
+        mlp.train(training_inputs, training_targets, 0.30, 100);
+
+        debug_info << "Algunas predicciones no redondeadas:\n";
+        for (size_t i = 0; i < min(size_t(10), testing_inputs.size()); i++) {
+            VectorXd prediction = mlp.feedforward(testing_inputs[i]);
+            debug_info << "Predicción " << i + 1 << ": " << prediction.transpose() << endl;
+        }
+
+        auto metrics = evaluate(testing_inputs, testing_targets, mlp);
+        debug_info << "Precision: " << metrics[0] << endl;
+        debug_info << "Recall: " << metrics[1] << endl;
+        debug_info << "F1 Score: " << metrics[2] << endl;
+
+        cout << left << setw(20) << to_string(config[0]) + " " + to_string(config[1]) + " " + to_string(config[2])
+             << setw(15) << setprecision(3) << metrics[0]
+             << setw(15) << setprecision(3) << metrics[1]
+             << setw(15) << setprecision(3) << metrics[2]
+             << endl;
+
+        debug_info << "Precisión: " << accuracy(testing_inputs, testing_targets, mlp) << endl;
+        debug_info << "Error cuadrático medio: " << mlp.mse(testing_inputs, testing_targets) << endl;
+
+        cout << debug_info.str() << endl;
+        cout << "Generando matriz de confusión para los datos de prueba..." << endl;
+        generateConfusionMatrix(testing_inputs, testing_targets, mlp);
+    }
+
+}
